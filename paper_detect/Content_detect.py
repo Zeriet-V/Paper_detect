@@ -202,6 +202,34 @@ def detect_paragraph_indent(paragraph):
 
 # ---------- 正文检测逻辑 ----------
 
+def get_paragraph_numbering_info(paragraph):
+    """
+    获取段落的 Word 自动编号信息
+    返回: (是否有编号, 编号级别)
+    """
+    try:
+        if paragraph._p.pPr is None:
+            return False, None
+        
+        numPr = paragraph._p.pPr.find(qn('w:numPr'))
+        if numPr is None:
+            return False, None
+        
+        # 获取编号级别
+        ilvl = numPr.find(qn('w:ilvl'))
+        level = int(ilvl.get(qn('w:val'))) if ilvl is not None else 0
+        
+        # 获取编号ID
+        numId = numPr.find(qn('w:numId'))
+        num_id = numId.get(qn('w:val')) if numId is not None else None
+        
+        if num_id is None or num_id == '0':
+            return False, None
+        
+        return True, level
+    except:
+        return False, None
+
 def identify_title_hierarchy(doc, tpl):
     """
     识别文档中的标题层级结构
@@ -226,6 +254,9 @@ def identify_title_hierarchy(doc, tpl):
             
         text = paragraph.text.strip()
         
+        # 检查段落是否有 Word 自动编号
+        has_auto_num, auto_num_level = get_paragraph_numbering_info(paragraph)
+        
         # 检查0 Introduction（带编号的格式）
         if re.match(level0_pattern, text, re.IGNORECASE):
             found_introduction = True
@@ -237,26 +268,44 @@ def identify_title_hierarchy(doc, tpl):
                 'paragraph': paragraph,
                 'paragraph_index': para_idx,
                 'full_text': text,
-                'has_number': True
+                'has_number': True,
+                'has_auto_numbering': False
             })
             title_sequence.append('0')
             print(f"找到Introduction: {text} (索引: {para_idx})")
         
-        # 检查单独的 Introduction（没有编号的格式）
+        # 检查单独的 Introduction（没有编号的格式，但可能有 Word 自动编号）
         elif re.match(r'^\s*Introduction\s*$', text, re.IGNORECASE) and not found_introduction:
             found_introduction = True
             
-            report['titles'].append({
-                'level': 0,
-                'number': '',
-                'text': 'Introduction',
-                'paragraph': paragraph,
-                'paragraph_index': para_idx,
-                'full_text': text,
-                'has_number': False
-            })
+            # 检查是否使用了 Word 自动编号
+            if has_auto_num and auto_num_level == 0:
+                # 有 Word 自动编号，视为有编号（但格式仍不正确，应该是文本形式的 "0 Introduction"）
+                report['titles'].append({
+                    'level': 0,
+                    'number': '[自动编号]',
+                    'text': 'Introduction',
+                    'paragraph': paragraph,
+                    'paragraph_index': para_idx,
+                    'full_text': text,
+                    'has_number': False,  # 虽然有自动编号，但格式不对
+                    'has_auto_numbering': True
+                })
+                print(f"找到Introduction: {text} (索引: {para_idx}, 使用Word自动编号)")
+            else:
+                # 完全没有编号
+                report['titles'].append({
+                    'level': 0,
+                    'number': '',
+                    'text': 'Introduction',
+                    'paragraph': paragraph,
+                    'paragraph_index': para_idx,
+                    'full_text': text,
+                    'has_number': False,
+                    'has_auto_numbering': False
+                })
+                print(f"找到Introduction: {text} (索引: {para_idx}, 无编号格式)")
             title_sequence.append('0')
-            print(f"找到Introduction: {text} (索引: {para_idx}, 无编号格式)")
         
         # 检查是否是空格数量错误的Introduction
         elif re.match(r'^\s*0\s+Introduction\s*$', text, re.IGNORECASE):
@@ -356,8 +405,55 @@ def identify_title_hierarchy(doc, tpl):
             if already_identified:
                 continue
             
-            # 检测格式特征：加粗 + 较大字体 + 长度适中
-            if paragraph.runs and len(text) > 10 and len(text) < 150:
+            # 检查是否有 Word 自动编号
+            has_auto_num, auto_num_level = get_paragraph_numbering_info(paragraph)
+            
+            # 如果有 Word 自动编号且级别为 0（一级编号）
+            if has_auto_num and auto_num_level == 0:
+                # 排除图表、参考文献等
+                text_lower = text.lower()
+                # 判断是否是参考文献：通常包含作者名、期刊名、年份等特征
+                is_reference = (
+                    text_lower.startswith('reference') or
+                    # 常见作者姓氏开头
+                    re.match(r'^[A-Z]{2,}\s+[A-Z]', text) or  # "ZHU R X, LI J" 格式
+                    # 包含期刊/会议标记
+                    '[J]' in text or '[D]' in text or '[C]' in text or '[M]' in text or
+                    # 标准文献
+                    text_lower.startswith('gb/t') or text_lower.startswith('iso')
+                )
+                
+                # 判断是否是图表标题：通常包含 diagram, layout, chart 等词
+                is_figure_caption = (
+                    'diagram' in text_lower or
+                    'layout' in text_lower or
+                    'chart' in text_lower or
+                    'schematic' in text_lower or
+                    'physical' in text_lower or
+                    text_lower.endswith('values') or
+                    'measurement values' in text_lower or
+                    'relation between' in text_lower
+                )
+                
+                if not (text_lower.startswith('table ') or 
+                       text_lower.startswith('figure ') or 
+                       text_lower.startswith('fig.') or
+                       text_lower.startswith('abstract') or
+                       text_lower.startswith('keywords') or
+                       text_lower.startswith('clc') or
+                       is_reference or
+                       is_figure_caption or
+                       re.match(r'^\d+[\-\—]', text) or  # 排除类似 "1-laptop" 这种
+                       re.match(r'^\(\d+\)', text)):  # 排除公式编号
+                    missing_number_titles.append({
+                        'paragraph_index': para_idx,
+                        'text': text,
+                        'font_size': None,
+                        'has_word_numbering': True
+                    })
+                    print(f"警告: 发现使用Word自动编号的标题 (索引 {para_idx}): '{text[:60]}...'")
+            # 否则，检测格式特征：加粗 + 较大字体 + 长度适中
+            elif paragraph.runs and len(text) > 10 and len(text) < 150:
                 first_run = paragraph.runs[0]
                 is_bold = first_run.font.bold if first_run.font.bold is not None else False
                 
@@ -384,16 +480,28 @@ def identify_title_hierarchy(doc, tpl):
                         missing_number_titles.append({
                             'paragraph_index': para_idx,
                             'text': text,
-                            'font_size': font_size
+                            'font_size': font_size,
+                            'has_word_numbering': False
                         })
                         print(f"警告: 发现疑似标题但缺少编号的段落 (索引 {para_idx}): '{text[:60]}...'")
     
     # 如果发现缺少编号的标题，添加到错误消息
     if missing_number_titles:
         report['ok'] = False
-        report['messages'].append(f"发现 {len(missing_number_titles)} 个疑似正文标题但缺少编号，标题应有编号格式（如 '1 Title', '1.1 Subtitle'）")
-        for item in missing_number_titles[:5]:  # 最多显示前5个
-            report['messages'].append(f"  - 段落 {item['paragraph_index']}: '{item['text'][:60]}...'")
+        
+        # 统计使用 Word 自动编号的标题数量
+        word_numbered_count = sum(1 for item in missing_number_titles if item.get('has_word_numbering', False))
+        no_number_count = len(missing_number_titles) - word_numbered_count
+        
+        if word_numbered_count > 0:
+            report['messages'].append(f"发现 {word_numbered_count} 个使用Word自动编号的标题，应改为文本形式的编号（如 '1 Title'，而非使用Word编号库）")
+            for item in [x for x in missing_number_titles if x.get('has_word_numbering', False)][:5]:
+                report['messages'].append(f"  - 段落 {item['paragraph_index']}: '{item['text'][:60]}...'")
+        
+        if no_number_count > 0:
+            report['messages'].append(f"发现 {no_number_count} 个疑似标题但完全缺少编号，标题应有编号格式（如 '1 Title', '1.1 Subtitle'）")
+            for item in [x for x in missing_number_titles if not x.get('has_word_numbering', False)][:5]:
+                report['messages'].append(f"  - 段落 {item['paragraph_index']}: '{item['text'][:60]}...'")
     
     # 验证Introduction
     if not found_introduction:
@@ -404,9 +512,11 @@ def identify_title_hierarchy(doc, tpl):
     else:
         # 检查Introduction是否有编号
         intro_has_number = False
+        intro_has_auto_numbering = False
         for title in report['titles']:
             if title['level'] == 0:
                 intro_has_number = title.get('has_number', False)
+                intro_has_auto_numbering = title.get('has_auto_numbering', False)
                 break
         
         if intro_has_number:
@@ -414,9 +524,12 @@ def identify_title_hierarchy(doc, tpl):
             if ok_msg:
                 report['messages'].append(ok_msg)
         else:
-            # Introduction没有编号，标记为错误
+            # Introduction没有正确的编号
             report['ok'] = False
-            error_msg = "Introduction标题缺少编号，应为 '0 Introduction'（0后恰好1个空格）"
+            if intro_has_auto_numbering:
+                error_msg = "Introduction标题使用了Word自动编号，应改为文本形式 '0 Introduction'（0后恰好1个空格）"
+            else:
+                error_msg = "Introduction标题缺少编号，应为 '0 Introduction'（0后恰好1个空格）"
             report['messages'].append(error_msg)
             print(f"警告: {error_msg}")
     
@@ -699,8 +812,9 @@ def check_content_text_format(doc, titles, tpl):
                 if title_info['level'] == 0 and title_info['text'] == 'Introduction':
                     introduction_index = idx
     
-    # 查找正文段落（只检测Introduction之后的内容）
+    # 查找正文段落（只检测Introduction之后、References之前的内容）
     content_paragraphs = []
+    consecutive_references = 0  # 连续的参考文献段落计数
     
     if introduction_index is not None:
         # 从Introduction段落的下一个段落开始检查
@@ -714,7 +828,46 @@ def check_content_text_format(doc, titles, tpl):
             # 检查是否为有效正文段落
             text = paragraph.text.strip()
             if not text or len(text) <= 20:
+                consecutive_references = 0  # 重置计数
                 continue
+            
+            # 检测是否为参考文献
+            text_lower = text.lower()
+            is_reference = (
+                # 以作者姓名开头（全大写字母 + 空格）
+                re.match(r'^[A-Z]{2,}\s+[A-Z]', text) or
+                # 包含文献类型标记
+                '[J]' in text or '[D]' in text or '[C]' in text or '[M]' in text or
+                # 标准文献编号
+                text_lower.startswith('gb/t') or text_lower.startswith('iso') or
+                # References标题
+                text_lower.startswith('reference')
+            )
+            
+            if is_reference:
+                consecutive_references += 1
+                # 连续出现3个参考文献，认为已经进入参考文献部分，停止收集正文
+                if consecutive_references >= 3:
+                    print(f"检测到参考文献部分（从段落 {i-2} 开始），停止收集正文段落")
+                    break
+                continue
+            else:
+                consecutive_references = 0  # 重置计数
+            
+            # 检查是否有 Word 自动编号（可能是标题）
+            has_auto_num, auto_num_level = get_paragraph_numbering_info(paragraph)
+            if has_auto_num and auto_num_level == 0:
+                # 有一级自动编号，很可能是标题，排除
+                # 但要排除参考文献等非标题内容
+                text_lower = text.lower()
+                is_likely_title = not (
+                    text_lower.startswith('reference') or
+                    re.match(r'^[A-Z]{2,}\s+[A-Z]', text) or  # 参考文献格式
+                    '[J]' in text or '[D]' in text or '[C]' in text or '[M]' in text or
+                    text_lower.startswith('gb/t') or text_lower.startswith('iso')
+                )
+                if is_likely_title:
+                    continue  # 排除这个疑似标题的段落
             
             # 排除表格标题、图片标题等
             # 表格标题通常以"Table"、"表"开头，或者包含居中对齐的数字标题
@@ -734,6 +887,20 @@ def check_content_text_format(doc, titles, tpl):
                 if alignment == WD_PARAGRAPH_ALIGNMENT.CENTER and len(text) < 80:
                     continue
             
+            # 排除加粗的短段落（很可能是标题但没有编号）
+            if paragraph.runs and len(text) < 150:
+                first_run = paragraph.runs[0]
+                is_bold = first_run.font.bold if first_run.font.bold is not None else False
+                if is_bold:
+                    # 加粗的段落，检查字体大小
+                    try:
+                        font_size = first_run.font.size.pt if first_run.font.size else 10.5
+                        # 如果字体大于正文（>10.5pt）且加粗，很可能是标题
+                        if font_size > 10.5:
+                            continue
+                    except:
+                        pass
+            
             # 这是有效的正文段落
             content_paragraphs.append(paragraph)
     
@@ -745,11 +912,10 @@ def check_content_text_format(doc, titles, tpl):
         return report
     
     issues = []
+    paragraphs_with_issues = []
     
-    # 检查前几个正文段落的格式（最多检查5个）
-    sample_paragraphs = content_paragraphs[:5]
-    
-    for i, paragraph in enumerate(sample_paragraphs):
+    # 检查所有正文段落的格式
+    for i, paragraph in enumerate(content_paragraphs):
         if not paragraph.runs:
             continue
         
@@ -757,50 +923,46 @@ def check_content_text_format(doc, titles, tpl):
         main_run = paragraph.runs[0]
         actual_size_pt, actual_font_name, actual_bold, actual_italic, actual_line_spacing = detect_font_for_run(main_run, paragraph)
         
-        paragraph_preview = paragraph.text[:30] + "..." if len(paragraph.text) > 30 else paragraph.text
+        paragraph_preview = paragraph.text[:40] + "..." if len(paragraph.text) > 40 else paragraph.text
+        paragraph_issues = []
         
         # 字体大小检查
         if 'font_size_pt' in format_rules:
             expected_size_pt = float(format_rules['font_size_pt'])
-            actual_size_name = get_font_size(actual_size_pt, tpl)
-            expected_size_name = get_font_size(expected_size_pt, tpl)
-            print(f"正文段落 {i+1} '{paragraph_preview}' 字体大小: {actual_size_name}（{actual_size_pt}pt）(期望: {expected_size_name}（{expected_size_pt}pt）)")
             if abs(actual_size_pt - expected_size_pt) > 0.5:
-                issues.append(f"正文段落 {i+1} 字体大小应为{expected_size_name}（{expected_size_pt}pt），实际为{actual_size_name}（{actual_size_pt}pt）")
+                actual_size_name = get_font_size(actual_size_pt, tpl)
+                expected_size_name = get_font_size(expected_size_pt, tpl)
+                paragraph_issues.append(f"字体大小应为{expected_size_name}（{expected_size_pt}pt），实际为{actual_size_name}（{actual_size_pt}pt）")
         
         # 字体名称检查
         if 'font_name' in format_rules:
             expected_font_name = str(format_rules['font_name'])
-            print(f"正文段落 {i+1} '{paragraph_preview}' 字体名称: {actual_font_name} (期望: {expected_font_name})")
             if expected_font_name.lower() not in actual_font_name.lower():
-                issues.append(f"正文段落 {i+1} 字体应为{expected_font_name}，实际为{actual_font_name}")
+                paragraph_issues.append(f"字体应为{expected_font_name}，实际为{actual_font_name}")
         
-        # 加粗检查（正文应该不加粗）
+        # 加粗检查
         if 'bold' in format_rules:
             expected_bold = bool(format_rules['bold'])
-            print(f"正文段落 {i+1} '{paragraph_preview}' 加粗: {'是' if actual_bold else '否'} (期望: {'是' if expected_bold else '否'})")
             if actual_bold != expected_bold:
                 bold_status = "加粗" if expected_bold else "不加粗"
                 actual_status = "加粗" if actual_bold else "不加粗"
-                issues.append(f"正文段落 {i+1} 应为{bold_status}，实际为{actual_status}")
+                paragraph_issues.append(f"应为{bold_status}，实际为{actual_status}")
         
-        # 斜体检查（正文应该不斜体）
+        # 斜体检查
         if 'italic' in format_rules:
             expected_italic = bool(format_rules['italic'])
-            print(f"正文段落 {i+1} '{paragraph_preview}' 斜体: {'是' if actual_italic else '否'} (期望: {'是' if expected_italic else '否'})")
             if actual_italic != expected_italic:
                 italic_status = "斜体" if expected_italic else "正体"
                 actual_status = "斜体" if actual_italic else "正体"
-                issues.append(f"正文段落 {i+1} 应为{italic_status}，实际为{actual_status}")
+                paragraph_issues.append(f"应为{italic_status}，实际为{actual_status}")
         
         # 行间距检查
         if 'line_spacing' in format_rules:
             expected_line_spacing = float(format_rules['line_spacing'])
-            actual_spacing_name = get_line_spacing_name(actual_line_spacing, tpl)
-            expected_spacing_name = get_line_spacing_name(expected_line_spacing, tpl)
-            print(f"正文段落 {i+1} '{paragraph_preview}' 行间距: {actual_spacing_name}（{actual_line_spacing}倍）(期望: {expected_spacing_name}（{expected_line_spacing}倍）)")
             if abs(actual_line_spacing - expected_line_spacing) > 0.1:
-                issues.append(f"正文段落 {i+1} 行间距应为{expected_spacing_name}（{expected_line_spacing}倍），实际为{actual_spacing_name}（{actual_line_spacing}倍）")
+                actual_spacing_name = get_line_spacing_name(actual_line_spacing, tpl)
+                expected_spacing_name = get_line_spacing_name(expected_line_spacing, tpl)
+                paragraph_issues.append(f"行间距应为{expected_spacing_name}（{expected_line_spacing}倍），实际为{actual_spacing_name}（{actual_line_spacing}倍）")
         
         # 对齐方式检查
         if 'alignment' in format_rules:
@@ -808,21 +970,42 @@ def check_content_text_format(doc, titles, tpl):
             alignment_map = {"left": 0, "center": 1, "right": 2, "justify": 3}
             expected_alignment = alignment_map.get(expected_alignment_str, 0)
             actual_alignment = detect_paragraph_alignment(paragraph)
-            actual_alignment_name = get_alignment_name(actual_alignment, tpl)
-            expected_alignment_name = get_alignment_name(expected_alignment, tpl)
-            print(f"正文段落 {i+1} '{paragraph_preview}' 对齐: {actual_alignment_name} (期望: {expected_alignment_name})")
             if actual_alignment != expected_alignment:
-                issues.append(f"正文段落 {i+1} 对齐方式应为{expected_alignment_name}，实际为{actual_alignment_name}")
+                actual_alignment_name = get_alignment_name(actual_alignment, tpl)
+                expected_alignment_name = get_alignment_name(expected_alignment, tpl)
+                paragraph_issues.append(f"对齐方式应为{expected_alignment_name}，实际为{actual_alignment_name}")
         
         # 首行缩进检查
         if 'first_line_indent' in format_rules:
             expected_first_indent = float(format_rules['first_line_indent'])
             first_line_indent, left_indent, right_indent = detect_paragraph_indent(paragraph)
-            print(f"正文段落 {i+1} '{paragraph_preview}' 首行缩进: {first_line_indent:.1f}pt (期望: {expected_first_indent}pt)")
             if abs(first_line_indent - expected_first_indent) > 2.0:  # 2pt容差
-                issues.append(f"正文段落 {i+1} 首行缩进应为{expected_first_indent}pt（约2字符），实际为{first_line_indent:.1f}pt")
+                paragraph_issues.append(f"首行缩进应为{expected_first_indent}pt（约2字符），实际为{first_line_indent:.1f}pt")
+        
+        # 如果这个段落有问题，记录下来
+        if paragraph_issues:
+            paragraphs_with_issues.append({
+                'index': i + 1,
+                'preview': paragraph_preview,
+                'issues': paragraph_issues
+            })
+            issues.extend([f"正文段落 {i+1} {issue}" for issue in paragraph_issues])
     
-    print(f"发现 {len(issues)} 个正文格式问题")
+    # 输出有问题的段落（简洁格式）
+    print(f"\n=== 正文段落格式检查结果 ===")
+    if paragraphs_with_issues:
+        print(f"发现 {len(paragraphs_with_issues)} 个段落有格式问题（共检查 {len(content_paragraphs)} 个段落）")
+        print("\n有问题的段落（简洁显示）：")
+        for p in paragraphs_with_issues[:10]:  # 控制台只显示前10个
+            print(f"  段落 {p['index']} '{p['preview']}'")
+            print(f"    问题: {'; '.join(p['issues'])}")
+        
+        if len(paragraphs_with_issues) > 10:
+            print(f"  ... 还有 {len(paragraphs_with_issues) - 10} 个段落有问题")
+    else:
+        print("✓ 所有正文段落格式正确")
+    
+    print(f"\n总计 {len(issues)} 个正文格式问题")
     
     if issues:
         report['ok'] = False
@@ -834,6 +1017,10 @@ def check_content_text_format(doc, titles, tpl):
         ok_msg = tpl.get('messages', {}).get('format_content_ok')
         if ok_msg:
             report['messages'].append(ok_msg)
+    
+    # 保存详细结果到字典中供后续使用
+    report['paragraphs_with_issues'] = paragraphs_with_issues
+    report['total_paragraphs'] = len(content_paragraphs)
     
     return report
 
@@ -877,6 +1064,35 @@ def check_content_with_template(doc_path, template_identifier):
             report['summary'].append(summary_tpl.format(ok=all_ok))
         except Exception:
             report['summary'].append(str(summary_tpl))
+    
+    # 保存详细的正文段落检查结果到文件
+    if 'paragraphs_with_issues' in content_format_report and content_format_report['paragraphs_with_issues']:
+        try:
+            import os
+            output_dir = os.path.dirname(doc_path)
+            base_name = os.path.splitext(os.path.basename(doc_path))[0]
+            detail_file = os.path.join(output_dir, f"{base_name}_content_details.txt")
+            
+            with open(detail_file, 'w', encoding='utf-8') as f:
+                f.write("=" * 80 + "\n")
+                f.write("正文段落格式检查详细报告\n")
+                f.write("=" * 80 + "\n\n")
+                f.write(f"文档: {os.path.basename(doc_path)}\n")
+                f.write(f"总段落数: {content_format_report.get('total_paragraphs', 0)}\n")
+                f.write(f"有问题段落数: {len(content_format_report['paragraphs_with_issues'])}\n\n")
+                f.write("-" * 80 + "\n\n")
+                
+                for p in content_format_report['paragraphs_with_issues']:
+                    f.write(f"段落 {p['index']}\n")
+                    f.write(f"内容: {p['preview']}\n")
+                    f.write(f"问题:\n")
+                    for issue in p['issues']:
+                        f.write(f"  - {issue}\n")
+                    f.write("\n" + "-" * 80 + "\n\n")
+            
+            print(f"\n详细报告已保存至: {detail_file}")
+        except Exception as e:
+            print(f"\n警告: 保存详细报告失败: {e}")
     
     return report
 
