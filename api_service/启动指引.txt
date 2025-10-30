@@ -1,0 +1,59 @@
+========================================
+论文格式检测系统 - API服务启动指引
+========================================
+
+📍 当前位置：api_service 目录
+
+🚀 启动服务（三选一）：
+
+  方式1：双击运行
+  ├─ start_api.bat
+  
+  方式2：命令行
+  ├─ pip install -r requirements.txt
+  └─ python api.py
+  
+  方式3：PowerShell
+  └─ python api.py
+
+✅ 服务启动后：
+  - API地址: http://localhost:8000
+  - 接口文档: http://localhost:8000/docs
+  - 在线测试: http://localhost:8000/redoc
+
+🧪 测试方式：
+
+  1. Web界面（最简单）
+     打开文件：web_demo.html
+  
+  2. Python客户端
+     python test_api_client.py ../template/test.docx
+  
+  3. 集成示例
+     python 集成示例.py
+
+📖 查看文档：
+
+  - README.md         - 本目录说明
+  - 快速开始.md       - 新手入门
+  - API使用总览.md    - 整体说明
+  - API_README.md     - 完整API文档
+
+💡 Python调用示例：
+
+  import requests
+  
+  # 上传文档
+  files = {"file": open("paper.docx", "rb")}
+  resp = requests.post("http://localhost:8000/api/detect", files=files)
+  task_id = resp.json()["task_id"]
+  
+  # 查询状态
+  status = requests.get(f"http://localhost:8000/api/status/{task_id}")
+  
+  # 下载结果
+  report = requests.get(f"http://localhost:8000/api/download/{task_id}/report")
+
+========================================
+祝使用愉快！🎉
+========================================

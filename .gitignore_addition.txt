@@ -1,0 +1,18 @@
+# 添加到 .gitignore 的内容
+
+# API配置文件（包含密钥，不要提交）
+config_api.py
+.paper_detect_config.py
+
+# 提取的图片
+extracted_figures/
+
+# API响应结果
+api_results/
+
+# API测试结果
+test_api_results/
+
+# 临时图片文件
+temp_images/
+
