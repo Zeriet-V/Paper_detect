@@ -16,11 +16,12 @@ from docx.oxml.ns import qn
 【正文内容检测 (Content Detection)】
 
 1. 【标题层级结构检测】
-   - 0 Introduction（编号从0开始，I大写）
+   - 0 Introduction（必须有编号0，I大写，0后恰好1个空格）
    - 1 Materials and Methods（一级标题，实词首字母大写）
    - 1.1 二级标题（仅第一个单词首字母大写，其余小写）
    - 1.1.1 三级标题（格式同二级标题）
    - 验证编号连续性和层级逻辑
+   - 注意：系统可以识别没有编号的 "Introduction"，但会标记为格式错误
 
 2. 【标题大小写规则】
    - 一级标题：每个实词首字母大写（Title Case）
@@ -225,7 +226,7 @@ def identify_title_hierarchy(doc, tpl):
             
         text = paragraph.text.strip()
         
-        # 检查0 Introduction
+        # 检查0 Introduction（带编号的格式）
         if re.match(level0_pattern, text, re.IGNORECASE):
             found_introduction = True
             
@@ -235,10 +236,27 @@ def identify_title_hierarchy(doc, tpl):
                 'text': 'Introduction',
                 'paragraph': paragraph,
                 'paragraph_index': para_idx,
-                'full_text': text
+                'full_text': text,
+                'has_number': True
             })
             title_sequence.append('0')
             print(f"找到Introduction: {text} (索引: {para_idx})")
+        
+        # 检查单独的 Introduction（没有编号的格式）
+        elif re.match(r'^\s*Introduction\s*$', text, re.IGNORECASE) and not found_introduction:
+            found_introduction = True
+            
+            report['titles'].append({
+                'level': 0,
+                'number': '',
+                'text': 'Introduction',
+                'paragraph': paragraph,
+                'paragraph_index': para_idx,
+                'full_text': text,
+                'has_number': False
+            })
+            title_sequence.append('0')
+            print(f"找到Introduction: {text} (索引: {para_idx}, 无编号格式)")
         
         # 检查是否是空格数量错误的Introduction
         elif re.match(r'^\s*0\s+Introduction\s*$', text, re.IGNORECASE):
@@ -306,6 +324,77 @@ def identify_title_hierarchy(doc, tpl):
             title_sequence.append(number)
             print(f"找到三级标题: {number} {title_text}")
     
+    # 检测疑似标题但缺少编号的段落（基于格式特征）
+    # 只检测 Introduction 之后的内容，避免误报 Title、Authors、Keywords 等
+    missing_number_titles = []
+    introduction_index = None
+    
+    # 先找到 Introduction 的位置
+    for title in report['titles']:
+        if title['level'] == 0:
+            introduction_index = title.get('paragraph_index')
+            break
+    
+    # 只在 Introduction 之后检测
+    if introduction_index is not None:
+        for para_idx, paragraph in enumerate(doc.paragraphs):
+            # 只检测 Introduction 之后的段落
+            if para_idx <= introduction_index:
+                continue
+                
+            if not paragraph.text or not paragraph.text.strip():
+                continue
+            
+            text = paragraph.text.strip()
+            
+            # 跳过已识别的标题
+            already_identified = False
+            for title in report['titles']:
+                if title.get('paragraph_index') == para_idx:
+                    already_identified = True
+                    break
+            if already_identified:
+                continue
+            
+            # 检测格式特征：加粗 + 较大字体 + 长度适中
+            if paragraph.runs and len(text) > 10 and len(text) < 150:
+                first_run = paragraph.runs[0]
+                is_bold = first_run.font.bold if first_run.font.bold is not None else False
+                
+                # 获取字体大小
+                font_size = None
+                try:
+                    if first_run.font.size:
+                        font_size = first_run.font.size.pt
+                except:
+                    pass
+                
+                # 如果是加粗且字体不是很小（可能是标题）
+                if is_bold and (font_size is None or font_size >= 10.5):
+                    # 排除一些明显不是标题的内容
+                    text_lower = text.lower()
+                    if not (text_lower.startswith('table ') or 
+                           text_lower.startswith('figure ') or 
+                           text_lower.startswith('fig.') or
+                           text_lower.startswith('abstract') or
+                           text_lower.startswith('keywords') or
+                           text_lower.startswith('clc') or
+                           re.match(r'^\d+[\-\—]', text) or  # 排除类似 "1-laptop" 这种
+                           re.match(r'^\(\d+\)', text)):  # 排除公式编号
+                        missing_number_titles.append({
+                            'paragraph_index': para_idx,
+                            'text': text,
+                            'font_size': font_size
+                        })
+                        print(f"警告: 发现疑似标题但缺少编号的段落 (索引 {para_idx}): '{text[:60]}...'")
+    
+    # 如果发现缺少编号的标题，添加到错误消息
+    if missing_number_titles:
+        report['ok'] = False
+        report['messages'].append(f"发现 {len(missing_number_titles)} 个疑似正文标题但缺少编号，标题应有编号格式（如 '1 Title', '1.1 Subtitle'）")
+        for item in missing_number_titles[:5]:  # 最多显示前5个
+            report['messages'].append(f"  - 段落 {item['paragraph_index']}: '{item['text'][:60]}...'")
+    
     # 验证Introduction
     if not found_introduction:
         report['ok'] = False
@@ -313,9 +402,23 @@ def identify_title_hierarchy(doc, tpl):
         if error_msg:
             report['messages'].append(error_msg)
     else:
-        ok_msg = tpl.get('messages', {}).get('structure_introduction_ok')
-        if ok_msg:
-            report['messages'].append(ok_msg)
+        # 检查Introduction是否有编号
+        intro_has_number = False
+        for title in report['titles']:
+            if title['level'] == 0:
+                intro_has_number = title.get('has_number', False)
+                break
+        
+        if intro_has_number:
+            ok_msg = tpl.get('messages', {}).get('structure_introduction_ok')
+            if ok_msg:
+                report['messages'].append(ok_msg)
+        else:
+            # Introduction没有编号，标记为错误
+            report['ok'] = False
+            error_msg = "Introduction标题缺少编号，应为 '0 Introduction'（0后恰好1个空格）"
+            report['messages'].append(error_msg)
+            print(f"警告: {error_msg}")
     
     # 验证编号连续性
     if len(report['titles']) > 1:

@@ -1,5 +1,5 @@
 {
-  "content_rule": "正文标题层级检测：0 Introduction起始，一级标题实词首字母大写，二三级标题仅首词大写，一级四号段前后一行，二三级五号，正文五号1.5倍行距首行缩进2字符",
+  "content_rule": "正文标题层级检测：0 Introduction起始（必须有编号0），一级标题实词首字母大写，二三级标题仅首词大写，一级四号段前后一行，二三级五号，正文五号1.5倍行距首行缩进2字符",
   "structure_rules": {
     "level0_pattern": "^\\s*0\\s{1}Introduction\\s*$",
     "level1_pattern": "^\\s*(\\d+)\\s{1}(.+)$",

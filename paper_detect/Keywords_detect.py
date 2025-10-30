@@ -12,7 +12,7 @@ from docx.oxml.ns import qn
 
 # 导入Title_detect的作者和标题提取功能
 try:
-    from Title_detect import extract_from_docx, parse_authors_by_regex, split_authors_block, get_nonempty_paragraphs
+    from paper_detect.Title_detect import extract_from_docx, parse_authors_by_regex, split_authors_block, get_nonempty_paragraphs
     TITLE_DETECT_AVAILABLE = True
 except ImportError:
     TITLE_DETECT_AVAILABLE = False
