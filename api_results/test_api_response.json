@@ -2,53 +2,19 @@
   "Fig.5": {
     "image_path": "extracted_figures\\test_Fig5.png",
     "is_chart": false,
-    "ok": true,
+    "ok": false,
     "messages": [
-      "图片类型: 照片"
+      "图片类型判断失败"
     ],
-    "api_details": {
-      "is_chart_check": {
-        "is_chart": false,
-        "chart_type": "照片"
-      }
-    }
+    "api_details": {}
   },
   "图片2": {
     "image_path": "extracted_figures\\test_Fig2.png",
-    "is_chart": true,
-    "ok": true,
+    "is_chart": false,
+    "ok": false,
     "messages": [
-      "✅ 图表内容符合所有规范"
+      "图片类型判断失败"
     ],
-    "api_details": {
-      "is_chart_check": {
-        "is_chart": true,
-        "chart_type": "折线图"
-      },
-      "check_results": {
-        "tick_direction": {
-          "ok": true,
-          "description": "指向图内"
-        },
-        "unit_format": {
-          "ok": true,
-          "issues": []
-        },
-        "unit_brackets": {
-          "ok": true,
-          "issues": []
-        },
-        "decimal_consistency": {
-          "ok": true,
-          "y_decimals": "1位",
-          "x_decimals": "1位"
-        },
-        "axis_title_consistency": {
-          "ok": true,
-          "y_type": "符号",
-          "x_type": "符号"
-        }
-      }
-    }
+    "api_details": {}
   }
 }

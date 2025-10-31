@@ -320,13 +320,44 @@ class FigureContentDetector:
             "response_format": {"type": "json_object"}  # 强制JSON输出
         }
         
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=60)
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            print(f"    API调用失败: {e}")
-            return None
+        # 添加重试机制：最多重试3次
+        max_retries = 3
+        retry_delay = 5  # 重试间隔5秒
+        
+        for attempt in range(max_retries):
+            try:
+                # 增加超时时间到180秒（3分钟），适应复杂图片处理
+                if attempt > 0:
+                    print(f"    第 {attempt + 1} 次重试...")
+                    import time
+                    time.sleep(retry_delay)
+                
+                response = requests.post(url, json=payload, headers=headers, timeout=180)
+                response.raise_for_status()
+                return response.json()
+                
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    print(f"    API调用超时（180秒），正在重试...")
+                else:
+                    print(f"    API调用超时（已重试{max_retries}次），建议：")
+                    print(f"      1. 检查网络连接")
+                    print(f"      2. 减小图片尺寸")
+                    print(f"      3. 稍后重试")
+                    return None
+                    
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    print(f"    网络错误: {e}，正在重试...")
+                else:
+                    print(f"    API调用失败（已重试{max_retries}次）: {e}")
+                    return None
+                    
+            except Exception as e:
+                print(f"    API调用失败: {e}")
+                return None
+        
+        return None
     
     def parse_api_response(self, response: Dict) -> Dict:
         """

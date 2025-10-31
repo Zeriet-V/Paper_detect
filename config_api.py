@@ -4,7 +4,7 @@
 # 硅基流动API配置
 SILICONFLOW_API_KEY = "sk-vverzmmnhjuobkiztovwgmgbjpnzmhfopyzluzjqukcoygha"
 SILICONFLOW_API_BASE = "https://api.siliconflow.cn/v1"
-SILICONFLOW_MODEL = "Qwen/Qwen3-VL-235B-A22B-Instruct"  # 视觉模型名称
+SILICONFLOW_MODEL = "Qwen/Qwen3-VL-235B-A22B-Thinking"  # 视觉模型名称
 
 # 图片内容检测配置
 ENABLE_FIGURE_CONTENT_CHECK = True  # 启用图片内容检测
