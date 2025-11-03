@@ -452,6 +452,19 @@ def identify_title_hierarchy(doc, tpl):
                         'has_word_numbering': True
                     })
                     print(f"警告: 发现使用Word自动编号的标题 (索引 {para_idx}): '{text[:60]}...'")
+                    
+                    # 也将此标题添加到 report['titles'] 中，以便进行格式检查
+                    # 标记为一级标题（level=1），因为使用了Word一级编号
+                    report['titles'].append({
+                        'level': 1,
+                        'number': '[Word自动编号]',
+                        'text': text,
+                        'paragraph': paragraph,
+                        'paragraph_index': para_idx,
+                        'full_text': text,
+                        'has_number': False,
+                        'has_auto_numbering': True  # 标记使用了Word自动编号
+                    })
             # 否则，检测格式特征：加粗 + 较大字体 + 长度适中
             elif paragraph.runs and len(text) > 10 and len(text) < 150:
                 first_run = paragraph.runs[0]
@@ -612,6 +625,10 @@ def check_title_format(titles, tpl):
         paragraph = title_info['paragraph']
         level = title_info['level']
         title_text = title_info['text']
+        has_auto_numbering = title_info.get('has_auto_numbering', False)
+        
+        # 为使用Word自动编号的标题添加前缀
+        title_prefix = "[使用Word自动编号] " if has_auto_numbering else ""
         
         if not paragraph.runs:
             continue
@@ -639,34 +656,34 @@ def check_title_format(titles, tpl):
             expected_size_pt = float(title_rules['font_size_pt'])
             actual_size_name = get_font_size(actual_size_pt, tpl)
             expected_size_name = get_font_size(expected_size_pt, tpl)
-            print(f"标题 '{title_text}' 字体大小: {actual_size_name}（{actual_size_pt}pt）(期望: {expected_size_name}（{expected_size_pt}pt）)")
+            print(f"{title_prefix}标题 '{title_text}' 字体大小: {actual_size_name}（{actual_size_pt}pt）(期望: {expected_size_name}（{expected_size_pt}pt）)")
             if abs(actual_size_pt - expected_size_pt) > 0.5:
-                issues.append(f"标题 '{title_text}' 字体大小应为{expected_size_name}（{expected_size_pt}pt），实际为{actual_size_name}（{actual_size_pt}pt）")
+                issues.append(f"{title_prefix}标题 '{title_text}' 字体大小应为{expected_size_name}（{expected_size_pt}pt），实际为{actual_size_name}（{actual_size_pt}pt）")
         
         # 字体名称检查
         if 'font_name' in title_rules:
             expected_font_name = str(title_rules['font_name'])
-            print(f"标题 '{title_text}' 字体名称: {actual_font_name} (期望: {expected_font_name})")
+            print(f"{title_prefix}标题 '{title_text}' 字体名称: {actual_font_name} (期望: {expected_font_name})")
             if expected_font_name.lower() not in actual_font_name.lower():
-                issues.append(f"标题 '{title_text}' 字体应为{expected_font_name}，实际为{actual_font_name}")
+                issues.append(f"{title_prefix}标题 '{title_text}' 字体应为{expected_font_name}，实际为{actual_font_name}")
         
         # 加粗检查
         if 'bold' in title_rules:
             expected_bold = bool(title_rules['bold'])
-            print(f"标题 '{title_text}' 加粗: {'是' if actual_bold else '否'} (期望: {'是' if expected_bold else '否'})")
+            print(f"{title_prefix}标题 '{title_text}' 加粗: {'是' if actual_bold else '否'} (期望: {'是' if expected_bold else '否'})")
             if actual_bold != expected_bold:
                 bold_status = "加粗" if expected_bold else "不加粗"
                 actual_status = "加粗" if actual_bold else "不加粗"
-                issues.append(f"标题 '{title_text}' 应为{bold_status}，实际为{actual_status}")
+                issues.append(f"{title_prefix}标题 '{title_text}' 应为{bold_status}，实际为{actual_status}")
         
         # 斜体检查
         if 'italic' in title_rules:
             expected_italic = bool(title_rules['italic'])
-            print(f"标题 '{title_text}' 斜体: {'是' if actual_italic else '否'} (期望: {'是' if expected_italic else '否'})")
+            print(f"{title_prefix}标题 '{title_text}' 斜体: {'是' if actual_italic else '否'} (期望: {'是' if expected_italic else '否'})")
             if actual_italic != expected_italic:
                 italic_status = "斜体" if expected_italic else "正体"
                 actual_status = "斜体" if actual_italic else "正体"
-                issues.append(f"标题 '{title_text}' 应为{italic_status}，实际为{actual_status}")
+                issues.append(f"{title_prefix}标题 '{title_text}' 应为{italic_status}，实际为{actual_status}")
         
         # 段前段后间距检查（所有标题级别）
         if 'space_before' in title_rules:
@@ -674,26 +691,26 @@ def check_title_format(titles, tpl):
             expected_lines = expected_space_before / 12.0
             actual_space_before = paragraph.paragraph_format.space_before
             actual_lines = actual_space_before.pt / 12.0 if actual_space_before and actual_space_before.pt else 0.0
-            print(f"标题 '{title_text}' 段前间距: {actual_lines:.1f}行 (期望: {expected_lines:.1f}行)")
+            print(f"{title_prefix}标题 '{title_text}' 段前间距: {actual_lines:.1f}行 (期望: {expected_lines:.1f}行)")
             
             # 特殊处理：1行可能显示为1.3行
             if expected_lines == 1.0 and 1.0 <= actual_lines <= 1.35:
                 pass  # 认为是正确的
             elif abs(actual_lines - expected_lines) > 0.2:
-                issues.append(f"标题 '{title_text}' 段前间距应为{expected_lines:.1f}行，实际为{actual_lines:.1f}行")
+                issues.append(f"{title_prefix}标题 '{title_text}' 段前间距应为{expected_lines:.1f}行，实际为{actual_lines:.1f}行")
         
         if 'space_after' in title_rules:
             expected_space_after = float(title_rules['space_after'])
             expected_lines = expected_space_after / 12.0
             actual_space_after = paragraph.paragraph_format.space_after
             actual_lines = actual_space_after.pt / 12.0 if actual_space_after and actual_space_after.pt else 0.0
-            print(f"标题 '{title_text}' 段后间距: {actual_lines:.1f}行 (期望: {expected_lines:.1f}行)")
+            print(f"{title_prefix}标题 '{title_text}' 段后间距: {actual_lines:.1f}行 (期望: {expected_lines:.1f}行)")
             
             # 特殊处理：1行可能显示为1.3行
             if expected_lines == 1.0 and 1.0 <= actual_lines <= 1.35:
                 pass  # 认为是正确的
             elif abs(actual_lines - expected_lines) > 0.2:
-                issues.append(f"标题 '{title_text}' 段后间距应为{expected_lines:.1f}行，实际为{actual_lines:.1f}行")
+                issues.append(f"{title_prefix}标题 '{title_text}' 段后间距应为{expected_lines:.1f}行，实际为{actual_lines:.1f}行")
     
     print(f"发现 {len(issues)} 个标题格式问题")
     
@@ -730,18 +747,22 @@ def check_title_case(titles, tpl):
     for title_info in titles:
         level = title_info['level']
         title_text = title_info['text']
+        has_auto_numbering = title_info.get('has_auto_numbering', False)
+        
+        # 为使用Word自动编号的标题添加前缀
+        title_prefix = "[使用Word自动编号] " if has_auto_numbering else ""
         
         if level == 0:  # Introduction特殊处理
             if title_text != 'Introduction':
-                issues.append(f"Introduction标题应为'Introduction'，实际为'{title_text}'")
+                issues.append(f"{title_prefix}Introduction标题应为'Introduction'，实际为'{title_text}'")
         elif level == 1:  # 一级标题：实词首字母大写
             corrected = apply_title_case(title_text, minor_words)
             if title_text != corrected:
-                issues.append(f"一级标题 '{title_text}' 大小写不正确，应为 '{corrected}'")
+                issues.append(f"{title_prefix}一级标题 '{title_text}' 大小写不正确，应为 '{corrected}'")
         elif level in [2, 3]:  # 二三级标题：仅首词大写
             corrected = apply_sentence_case(title_text)
             if title_text != corrected:
-                issues.append(f"{'二' if level == 2 else '三'}级标题 '{title_text}' 大小写不正确，应为 '{corrected}'")
+                issues.append(f"{title_prefix}{'二' if level == 2 else '三'}级标题 '{title_text}' 大小写不正确，应为 '{corrected}'")
     
     if issues:
         report['ok'] = False

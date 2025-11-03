@@ -17,6 +17,7 @@
       "font_name": "Times New Roman",
       "bold": true,
       "italic": false,
+      "alignment": "justify",
       "space_before": 1,
       "space_after": 1
     },
@@ -25,6 +26,7 @@
       "font_name": "Times New Roman",
       "bold": false,
       "italic": false,
+      "alignment": "justify",
       "space_before": 0,
       "space_after": 0
     },
@@ -33,6 +35,7 @@
       "font_name": "Times New Roman",
       "bold": false,
       "italic": false,
+      "alignment": "justify",
       "space_before": 0,
       "space_after": 1
     }

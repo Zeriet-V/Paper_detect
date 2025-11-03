@@ -256,19 +256,22 @@ def detect_font_for_run(run, paragraph=None):
     """
     更健壮的字体检测函数，同时检查直接格式和段落样式。
     返回 (font_size_pt, font_name, is_bold, is_italic, candidates_dict)
+    注意：font_name是英文字体（ASCII字体）
     """
-    font_source = run.font if run else (paragraph.style.font if paragraph else None)
-    if not font_source:
-        return 12.0, "Unknown", False, False, {}
-
-    font_name = font_source.name if font_source.name else "Times New Roman"
-
     font_size = None
+    font_name_ascii = None
+    is_bold = False
+    is_italic = False
+    
+    if not run:
+        return 12.0, "Times New Roman", False, False, {}
+    
+    # 1. 检测字号
     try:
-        if run and run.font and run.font.size and hasattr(run.font.size, 'pt'):
+        if run.font and run.font.size and hasattr(run.font.size, 'pt'):
             font_size = float(run.font.size.pt)
         
-        if font_size is None and run and hasattr(run._element, 'rPr'):
+        if font_size is None and hasattr(run._element, 'rPr'):
             sz_nodes = run._element.xpath('.//w:sz')
             if sz_nodes and sz_nodes[0].get(qn('w:val')):
                 font_size = float(sz_nodes[0].get(qn('w:val'))) / 2.0
@@ -282,20 +285,57 @@ def detect_font_for_run(run, paragraph=None):
                 font_size = float(sz_nodes[0].get(qn('w:val'))) / 2.0
     except Exception:
         pass
-
-    font_size = font_size if font_size is not None else 12.0
-
-    is_bold = font_source.bold if font_source.bold is not None else False
-    is_italic = font_source.italic if font_source.italic is not None else False
-    if run and run.font:
-        is_bold = run.font.bold if run.font.bold is not None else is_bold
-        is_italic = run.font.italic if run.font.italic is not None else is_italic
     
-    # 确保返回明确的布尔值，而不是None
-    is_bold = bool(is_bold) if is_bold is not None else False
-    is_italic = bool(is_italic) if is_italic is not None else False
+    font_size = font_size if font_size is not None else 12.0
+    
+    # 2. 检测英文字体（ASCII）和中文字体（EastAsia）
+    font_name_eastasia = None
+    
+    try:
+        # 优先从run.font.name读取
+        if run.font and run.font.name:
+            font_name_ascii = run.font.name
+        
+        # 从XML中读取w:rFonts
+        if hasattr(run._element, 'rPr'):
+            rpr = run._element.rPr
+            if rpr is not None:
+                rfonts = rpr.find(qn('w:rFonts'))
+                if rfonts is not None:
+                    # 读取各种字体属性
+                    xml_ascii = rfonts.get(qn('w:ascii'))
+                    xml_hansi = rfonts.get(qn('w:hAnsi'))
+                    xml_eastasia = rfonts.get(qn('w:eastAsia'))
+                    
+                    # ASCII字体（英文）
+                    if xml_ascii:
+                        font_name_ascii = xml_ascii
+                    elif xml_hansi and font_name_ascii is None:
+                        font_name_ascii = xml_hansi
+                    
+                    # EastAsia字体（中文）
+                    if xml_eastasia:
+                        font_name_eastasia = xml_eastasia
+                    elif xml_hansi and font_name_eastasia is None:
+                        font_name_eastasia = xml_hansi
+    except Exception:
+        pass
+    
+    font_name_ascii = font_name_ascii if font_name_ascii else "Times New Roman"
+    font_name_eastasia = font_name_eastasia if font_name_eastasia else "宋体"
+    
+    # 3. 检测加粗和斜体
+    try:
+        if run.font:
+            is_bold = run.font.bold if run.font.bold is not None else False
+            is_italic = run.font.italic if run.font.italic is not None else False
+        
+        is_bold = bool(is_bold)
+        is_italic = bool(is_italic)
+    except Exception:
+        pass
 
-    return font_size, font_name, is_bold, is_italic, {}
+    return font_size, font_name_ascii, is_bold, is_italic, {'font_eastasia': font_name_eastasia}
 
 # ---------- 其余工具（你现有的作者/单位解析） ----------
 def get_font_size(pt_size, tpl=None):
@@ -617,6 +657,7 @@ def check_format_section(doc_path, tpl):
                 expected_italic=bool(tr.get('italic')),
                 expected_space_before=float(tr.get('space_before')),
                 expected_space_after=float(tr.get('space_after')),
+                expected_alignment=tr.get('alignment'),
                 tpl=tpl)
             if title_format_issues:
                 report['ok'] = False
@@ -636,6 +677,7 @@ def check_format_section(doc_path, tpl):
                     expected_italic=bool(ar.get('italic')),
                     expected_space_before=float(ar.get('space_before')),
                     expected_space_after=float(ar.get('space_after')),
+                    expected_alignment=ar.get('alignment'),
                     tpl=tpl)
                 if author_format_issues:
                     report['ok'] = False
@@ -712,7 +754,7 @@ def check_format_section(doc_path, tpl):
 
 # ---------- 段落格式检查 ----------
 
-def check_paragraph_format(paragraph, expected_font_size_pt, expected_font_name, expected_bold, expected_italic, expected_space_before, expected_space_after, tpl=None):
+def check_paragraph_format(paragraph, expected_font_size_pt, expected_font_name, expected_bold, expected_italic, expected_space_before, expected_space_after, expected_alignment=None, tpl=None):
     issues = []
     print(f"检查段落: '{paragraph.text[:30]}...'")
     
@@ -721,7 +763,8 @@ def check_paragraph_format(paragraph, expected_font_size_pt, expected_font_name,
         issues.append("段落没有可供检查的文本内容")
         return issues
         
-    actual_size_pt, actual_font_name, actual_bold, actual_italic, _ = detect_font_for_run(main_run, paragraph)
+    actual_size_pt, actual_font_name, actual_bold, actual_italic, extra_info = detect_font_for_run(main_run, paragraph)
+    actual_font_eastasia = extra_info.get('font_eastasia', '宋体')
 
     # 字体大小
     if expected_font_size_pt is not None:
@@ -731,11 +774,11 @@ def check_paragraph_format(paragraph, expected_font_size_pt, expected_font_name,
         if abs(actual_size_pt - expected_font_size_pt) > 0.5:
             issues.append(f"字体大小应为{expected_size_name} ({expected_font_size_pt}pt)，实际为{actual_size_name} ({actual_size_pt}pt)")
 
-    # 字体名称
+    # 字体名称（英文字体）
     if expected_font_name is not None:
-        print(f"字体名称: {actual_font_name} (期望: {expected_font_name})")
-        if expected_font_name.lower() not in actual_font_name.lower():
-            issues.append(f"字体应为{expected_font_name}，实际为{actual_font_name}")
+        print(f"英文字体: {actual_font_name}, 中文字体: {actual_font_eastasia} (期望: {expected_font_name})")
+        if actual_font_name != expected_font_name:
+            issues.append(f"英文字体应为{expected_font_name}，实际为{actual_font_name}")
 
     # 加粗
     if expected_bold is not None:
@@ -771,6 +814,45 @@ def check_paragraph_format(paragraph, expected_font_size_pt, expected_font_name,
             pass  # 认为是正确的
         elif abs(actual_lines - expected_space_after) > 0.2:
             issues.append(f"段后间距应为{expected_space_after}行，实际为{actual_lines:.1f}行")
+    
+    # 对齐方式
+    if expected_alignment is not None:
+        # 获取段落对齐方式
+        actual_alignment = paragraph.paragraph_format.alignment
+        if actual_alignment is None:
+            # 尝试从样式获取
+            if paragraph.style and paragraph.style.paragraph_format.alignment is not None:
+                actual_alignment = paragraph.style.paragraph_format.alignment
+            else:
+                actual_alignment = WD_PARAGRAPH_ALIGNMENT.LEFT  # 默认左对齐
+        
+        alignment_names = {
+            0: '左对齐',
+            1: '居中对齐',
+            2: '右对齐',
+            3: '两端对齐',
+            WD_PARAGRAPH_ALIGNMENT.LEFT: '左对齐',
+            WD_PARAGRAPH_ALIGNMENT.CENTER: '居中对齐',
+            WD_PARAGRAPH_ALIGNMENT.RIGHT: '右对齐',
+            WD_PARAGRAPH_ALIGNMENT.JUSTIFY: '两端对齐'
+        }
+        
+        actual_alignment_name = alignment_names.get(actual_alignment, '未知')
+        print(f"对齐方式: {actual_alignment_name} (期望: {expected_alignment})")
+        
+        # 判断是否符合要求
+        if expected_alignment == 'justify':
+            expected_val = WD_PARAGRAPH_ALIGNMENT.JUSTIFY
+            if actual_alignment != expected_val and actual_alignment != 3:
+                issues.append(f"对齐方式应为两端对齐，实际为{actual_alignment_name}")
+        elif expected_alignment == 'center':
+            expected_val = WD_PARAGRAPH_ALIGNMENT.CENTER
+            if actual_alignment != expected_val and actual_alignment != 1:
+                issues.append(f"对齐方式应为居中对齐，实际为{actual_alignment_name}")
+        elif expected_alignment == 'left':
+            expected_val = WD_PARAGRAPH_ALIGNMENT.LEFT
+            if actual_alignment != expected_val and actual_alignment != 0:
+                issues.append(f"对齐方式应为左对齐，实际为{actual_alignment_name}")
             
     print(f"发现 {len(issues)} 个格式问题")
     print("---")
