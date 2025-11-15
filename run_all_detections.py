@@ -110,7 +110,7 @@ def import_detection_modules():
     return detection_functions
 
 
-def run_all_detections(docx_path, detection_functions, enable_figure_api=False):
+def run_all_detections(docx_path, detection_functions, enable_figure_api=False, detection_config=None):
     """
     调用所有检测模块并收集报告
     
@@ -118,16 +118,32 @@ def run_all_detections(docx_path, detection_functions, enable_figure_api=False):
         docx_path: 待检测的文档路径
         detection_functions: 检测函数字典
         enable_figure_api: 是否启用Figure模块的API内容检测
+        detection_config: 检测配置字典，指定启用哪些模块
+                         例如：{'Title': True, 'Abstract': True, 'Content': False}
+                         如果为None，则执行所有模块
     
     返回：
         {模块名: 报告字典} 的字典
     """
     all_reports = {}
     
+    # 如果没有提供配置，默认全部执行
+    if detection_config is None:
+        detection_config = {module: True for module in DETECTION_ORDER}
+    
     print(f"\n开始检测文档: {docx_path}")
     print("=" * 60)
     
+    # 显示启用的检测模块
+    enabled_modules = [m for m in DETECTION_ORDER if detection_config.get(m, True)]
+    print(f"启用的检测模块: {', '.join(enabled_modules)}")
+    print("=" * 60)
+    
     for module_name in DETECTION_ORDER:
+        # 检查模块是否启用
+        if not detection_config.get(module_name, True):
+            print(f"\n【{module_name} 检测】- 已跳过（未启用）")
+            continue
         template_path = TEMPLATE_MAPPING[module_name][2]
         detection_func = detection_functions[module_name]
         
@@ -410,20 +426,31 @@ def find_paragraph_by_keyword(doc, keyword, case_sensitive=False):
     return None
 
 
-def find_paragraph_by_index(doc, index):
+def find_paragraph_by_index(doc, index, skip_empty=True):
     """
     通过索引查找段落
     
     参数：
         doc: Document对象
         index: 段落索引
+        skip_empty: 是否跳过空段落（默认True，兼容旧逻辑）
     
     返回：
         段落对象，索引无效返回None
     """
     try:
-        if 0 <= index < len(doc.paragraphs):
-            return doc.paragraphs[index]
+        if not skip_empty:
+            # 不跳过空行，直接返回
+            if 0 <= index < len(doc.paragraphs):
+                return doc.paragraphs[index]
+        else:
+            # 跳过空行，找到第N个非空段落
+            non_empty_count = 0
+            for paragraph in doc.paragraphs:
+                if paragraph.text and paragraph.text.strip():
+                    if non_empty_count == index:
+                        return paragraph
+                    non_empty_count += 1
     except Exception:
         pass
     
@@ -662,6 +689,11 @@ def parse_issues_from_reports(all_reports):
                         current_group = None  # 跟踪当前消息组
                         
                         for msg in messages:
+                            # 跳过独立批注标记的消息
+                            if msg.startswith('__COMMENT_PARA_'):
+                                affiliation_msgs.append(msg)
+                                continue
+                                
                             msg_lower = msg.lower()
                             msg_stripped = msg.strip()
                             
@@ -695,8 +727,9 @@ def parse_issues_from_reports(all_reports):
                                     # 如果没有当前组，默认归类到标题
                                     title_msgs.append(msg)
                         
-                        # 为每组消息创建独立的issue
-                        if title_msgs:
+                        # 为每组消息创建独立的issue（只添加包含问题的组）
+                        # 判断是否有实际问题：检查消息中是否包含"问题"或"错误"关键字
+                        if title_msgs and any('问题' in msg or '错误' in msg for msg in title_msgs):
                             issues.append({
                                 'module': module_name,
                                 'section': section_key + '_title',
@@ -705,7 +738,7 @@ def parse_issues_from_reports(all_reports):
                                 'locate_data': 0
                             })
                         
-                        if author_msgs:
+                        if author_msgs and any('问题' in msg or '错误' in msg for msg in author_msgs):
                             issues.append({
                                 'module': module_name,
                                 'section': section_key + '_authors',
@@ -715,13 +748,28 @@ def parse_issues_from_reports(all_reports):
                             })
                         
                         if affiliation_msgs:
-                            # 尝试按段落分组单位消息
-                            # 消息格式如："单位格式问题（第4段）："
+                            # 分组单位消息：按段落和问题类型
+                            # 1. 提取独立批注标记的消息 (__COMMENT_PARA_X__)
+                            # 2. 其他消息按段落分组
+                            comment_issues = {}  # {para_idx: {issue_type: [messages]}}
                             affiliation_by_para = {}
                             general_affiliation_msgs = []
-                            current_para_idx = None  # 跟踪当前段落索引
+                            current_para_idx = None
                             
                             for msg in affiliation_msgs:
+                                # 检查是否是独立批注标记
+                                comment_match = re.match(r'__COMMENT_PARA_(\d+)__(.+)', msg)
+                                if comment_match:
+                                    para_num = int(comment_match.group(1))
+                                    # para_num 现在是doc.paragraphs中的实际1-based索引
+                                    para_idx = para_num - 1  # 转换为0-based索引用于定位
+                                    comment_msg = comment_match.group(2)
+                                    
+                                    if para_idx not in comment_issues:
+                                        comment_issues[para_idx] = []
+                                    comment_issues[para_idx].append(comment_msg)
+                                    continue
+                                
                                 msg_stripped = msg.strip()
                                 is_header = not msg_stripped.startswith('- ')
                                 
@@ -729,13 +777,17 @@ def parse_issues_from_reports(all_reports):
                                     # 标题行，尝试提取段落编号
                                     para_match = re.search(r'第(\d+)段', msg)
                                     if para_match:
-                                        current_para_idx = int(para_match.group(1)) - 1  # 转换为0-based索引
+                                        # 这个编号现在是实际的1-based索引（包括空行）
+                                        para_num = int(para_match.group(1))
+                                        current_para_idx = para_num - 1  # 转换为0-based
                                         if current_para_idx not in affiliation_by_para:
                                             affiliation_by_para[current_para_idx] = []
                                         affiliation_by_para[current_para_idx].append(msg)
                                     else:
                                         current_para_idx = None
-                                        general_affiliation_msgs.append(msg)
+                                        # 跳过总结性的标题（如"单位编号格式错误（共 3 处）"）
+                                        if '共' not in msg and '处' not in msg:
+                                            general_affiliation_msgs.append(msg)
                                 else:
                                     # 子项，归入当前段落
                                     if current_para_idx is not None:
@@ -743,18 +795,34 @@ def parse_issues_from_reports(all_reports):
                                     else:
                                         general_affiliation_msgs.append(msg)
                             
-                            # 为每个单位段落创建独立的批注
-                            for para_idx, msgs in affiliation_by_para.items():
-                                issues.append({
-                                    'module': module_name,
-                                    'section': section_key + f'_affiliation_para{para_idx+1}',
-                                    'messages': msgs,
-                                    'locate_method': 'index',
-                                    'locate_data': para_idx
-                                })
+                            # 为每个段落的独立问题创建批注
+                            for para_idx, comment_msgs in comment_issues.items():
+                                # 每两条消息一组（错误描述+建议修改）
+                                for i in range(0, len(comment_msgs), 2):
+                                    issue_msgs = comment_msgs[i:i+2]
+                                    issue_type = 'numbering' if '编号' in issue_msgs[0] else 'other'
+                                    issues.append({
+                                        'module': module_name,
+                                        'section': section_key + f'_affiliation_para{para_idx+1}_{issue_type}',
+                                        'messages': issue_msgs,
+                                        'locate_method': 'index',
+                                        'locate_data': para_idx
+                                    })
                             
-                            # 如果有通用的单位消息（没有段落编号），定位到第一个单位
-                            if general_affiliation_msgs:
+                            # 为每个单位段落的其他问题创建批注（段后间距等）
+                            # 只添加包含实际问题的段落
+                            for para_idx, msgs in affiliation_by_para.items():
+                                if any('问题' in msg or '错误' in msg for msg in msgs):
+                                    issues.append({
+                                        'module': module_name,
+                                        'section': section_key + f'_affiliation_para{para_idx+1}_format',
+                                        'messages': msgs,
+                                        'locate_method': 'index',
+                                        'locate_data': para_idx
+                                    })
+                            
+                            # 通用单位消息（只添加包含实际问题的消息）
+                            if general_affiliation_msgs and any('问题' in msg or '错误' in msg for msg in general_affiliation_msgs):
                                 issues.append({
                                     'module': module_name,
                                     'section': section_key + '_affiliations',
@@ -783,12 +851,20 @@ def parse_issues_from_reports(all_reports):
                 if isinstance(section_value, dict) and not section_value.get('ok', False):
                     messages = section_value.get('messages', [])
                     if messages:
+                        # 根据section类型决定定位策略
+                        if section_key == 'structure':
+                            # structure批注放在Abstract标题段落
+                            locate_method = 'abstract_title'
+                        else:
+                            # paragraphs和format批注放在内容段落
+                            locate_method = 'abstract_content'
+                        
                         issues.append({
                             'module': module_name,
                             'section': section_key,
                             'messages': messages,
-                            'locate_method': 'keyword',
-                            'locate_data': 'Abstract:'
+                            'locate_method': locate_method,
+                            'locate_data': 'Abstract'
                         })
         
         elif module_name == 'Keywords':
@@ -803,18 +879,26 @@ def parse_issues_from_reports(all_reports):
                         # 区分Keywords和CLC、Footnote
                         if 'clc' in section_key.lower():
                             locate_data = 'CLC number'
+                            locate_method = 'keyword'
                         elif 'footnote' in section_key.lower():
                             # 脚注问题：定位到CLC行（脚注引用通常在这一行）
                             # 因为Word脚注在文档底部，无法直接定位，所以定位到引用位置
                             locate_data = 'CLC number'
+                            locate_method = 'keyword'
+                        elif section_key == 'structure':
+                            # structure批注放在Keywords标题段落
+                            locate_data = 'Keywords'
+                            locate_method = 'keywords_title'
                         else:
-                            locate_data = 'Keywords:'
+                            # paragraphs和format批注放在内容段落
+                            locate_data = 'Keywords'
+                            locate_method = 'keywords_content'
                         
                         issues.append({
                             'module': module_name,
                             'section': section_key,
                             'messages': messages,
-                            'locate_method': 'keyword',
+                            'locate_method': locate_method,
                             'locate_data': locate_data
                         })
         
@@ -865,19 +949,23 @@ def parse_issues_from_reports(all_reports):
                                 title_info = next((t for t in titles if t.get('text') == title_text), None)
                                 if title_info and 'paragraph_index' in title_info:
                                     # 直接使用paragraph_index定位，更准确
+                                    para_idx = title_info.get('paragraph_index')
+                                    # 为每个标题创建单独的批注，使用唯一的section名称
+                                    clean_title = re.sub(r'[^\w]', '_', title_text[:20])  # 清理标题用作section名称
                                     issues.append({
                                         'module': module_name,
-                                        'section': section_key,
+                                        'section': f'{section_key}_{clean_title}',
                                         'messages': title_messages,
                                         'locate_method': 'index',
-                                        'locate_data': title_info.get('paragraph_index')
+                                        'locate_data': para_idx
                                     })
                                 elif title_text:
                                     # 如果没有索引，尝试用完整标题文本（包括编号）定位
                                     full_title_text = title_info.get('full_text', title_text) if title_info else title_text
+                                    clean_title = re.sub(r'[^\w]', '_', title_text[:20])
                                     issues.append({
                                         'module': module_name,
-                                        'section': section_key,
+                                        'section': f'{section_key}_{clean_title}',
                                         'messages': title_messages,
                                         'locate_method': 'text',
                                         'locate_data': full_title_text
@@ -1196,8 +1284,59 @@ def add_all_comments(doc_path, copy_path, issues_list):
             paragraph = None
             if locate_method == 'keyword' and locate_data:
                 paragraph = find_paragraph_by_keyword(doc, locate_data)
+            elif locate_method == 'abstract_title':
+                # 定位到Abstract标题段落（用于structure批注）
+                # 先尝试正确格式
+                paragraph = find_paragraph_by_keyword(doc, 'Abstract:')
+                if not paragraph:
+                    # 尝试错误格式（Abstract单独成行）
+                    for para in doc.paragraphs:
+                        if para.text and re.match(r'^\s*Abstract\s*$', para.text.strip(), re.IGNORECASE):
+                            paragraph = para  # 定位到标题段落本身
+                            break
+            elif locate_method == 'abstract_content':
+                # 定位到Abstract内容段落（用于paragraphs和format批注）
+                # 先尝试正确格式
+                paragraph = find_paragraph_by_keyword(doc, 'Abstract:')
+                if not paragraph:
+                    # 尝试错误格式（Abstract单独成行，定位到下一个内容段落）
+                    for i, para in enumerate(doc.paragraphs):
+                        if para.text and re.match(r'^\s*Abstract\s*$', para.text.strip(), re.IGNORECASE):
+                            # 找到Abstract单独一行，定位到下一个非空段落（实际内容）
+                            for j in range(i+1, min(i+3, len(doc.paragraphs))):
+                                if doc.paragraphs[j].text and doc.paragraphs[j].text.strip():
+                                    paragraph = doc.paragraphs[j]
+                                    break
+                            break
+            elif locate_method == 'keywords_title':
+                # 定位到Keywords标题段落（用于structure批注）
+                # 先尝试正确格式
+                paragraph = find_paragraph_by_keyword(doc, 'Keywords:')
+                if not paragraph:
+                    # 尝试错误格式（Keywords单独成行）
+                    for para in doc.paragraphs:
+                        if para.text and re.match(r'^\s*Keywords\s*$', para.text.strip(), re.IGNORECASE):
+                            paragraph = para  # 定位到标题段落本身
+                            break
+            elif locate_method == 'keywords_content':
+                # 灵活定位Keywords：优先找Keywords:，找不到就找Keywords（单独一行）
+                # 先尝试正确格式
+                paragraph = find_paragraph_by_keyword(doc, 'Keywords:')
+                if not paragraph:
+                    # 尝试错误格式（Keywords单独成行）
+                    for i, para in enumerate(doc.paragraphs):
+                        if para.text and re.match(r'^\s*Keywords\s*$', para.text.strip(), re.IGNORECASE):
+                            # 找到Keywords单独一行，定位到下一个非空段落（实际内容）
+                            for j in range(i+1, min(i+3, len(doc.paragraphs))):
+                                if doc.paragraphs[j].text and doc.paragraphs[j].text.strip():
+                                    paragraph = doc.paragraphs[j]
+                                    break
+                            break
             elif locate_method == 'index':
-                paragraph = find_paragraph_by_index(doc, locate_data)
+                # 判断是否需要跳过空行
+                # 单位段落和Content标题格式批注都不应该跳过空行（使用实际索引）
+                skip_empty = 'affiliation_para' not in section_name and 'Content-format' not in f"{module_name}-{section_name}" and 'Content-case' not in f"{module_name}-{section_name}"
+                paragraph = find_paragraph_by_index(doc, locate_data, skip_empty=skip_empty)
             elif locate_method == 'text':
                 paragraph = find_paragraph_by_text(doc, locate_data)
             elif locate_method == 'paragraph_object':
