@@ -9,6 +9,15 @@ from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml.ns import qn
 
+# 全局检测配置（由 run_all_detections 在导入时注入）
+GLOBAL_DETECTION_CONFIG = {'skip_checks': set()}
+
+def should_skip_check(check_name):
+    """
+    判断是否应该跳过某个检测项
+    """
+    return check_name in GLOBAL_DETECTION_CONFIG.get('skip_checks', set())
+
 # spaCy支持（可选）
 try:
     import spacy
@@ -829,7 +838,7 @@ def check_paragraph_format(paragraph, expected_font_size_pt, expected_font_name,
     actual_font_eastasia = extra_info.get('font_eastasia', '宋体')
 
     # 字体大小
-    if expected_font_size_pt is not None:
+    if not should_skip_check('font_size') and expected_font_size_pt is not None:
         actual_size_name = get_font_size(actual_size_pt, tpl)
         expected_size_name = get_font_size(expected_font_size_pt, tpl)
         print(f"字体大小: {actual_size_name}（{actual_size_pt}pt）(期望: {expected_size_name}（{expected_font_size_pt}pt）)")
@@ -837,19 +846,19 @@ def check_paragraph_format(paragraph, expected_font_size_pt, expected_font_name,
             issues.append(f"字体大小应为{expected_size_name} ({expected_font_size_pt}pt)，实际为{actual_size_name} ({actual_size_pt}pt)")
 
     # 字体名称（英文字体）
-    if expected_font_name is not None:
+    if not should_skip_check('font_name') and expected_font_name is not None:
         print(f"英文字体: {actual_font_name}, 中文字体: {actual_font_eastasia} (期望: {expected_font_name})")
         if actual_font_name != expected_font_name:
             issues.append(f"英文字体应为{expected_font_name}，实际为{actual_font_name}")
 
     # 加粗
-    if expected_bold is not None:
+    if not should_skip_check('bold') and expected_bold is not None:
         print(f"加粗: {'是' if actual_bold else '否'} (期望: {'是' if expected_bold else '否'})")
         if actual_bold != bool(expected_bold):
             issues.append(f"字体应为{'加粗' if expected_bold else '不加粗'}，实际为{'加粗' if actual_bold else '不加粗'}")
 
     # 斜体
-    if expected_italic is not None:
+    if not should_skip_check('italic') and expected_italic is not None:
         print(f"斜体: {'是' if actual_italic else '否'} (期望: {'是' if expected_italic else '否'})")
         if actual_italic != bool(expected_italic):
             issues.append(f"字体应为{'斜体' if expected_italic else '正体'}，实际为{'斜体' if actual_italic else '正体'}")

@@ -11,6 +11,15 @@ from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml.ns import qn
 
+# 全局检测配置（由 run_all_detections 在导入时注入）
+GLOBAL_DETECTION_CONFIG = {'skip_checks': set()}
+
+def should_skip_check(check_name):
+    """
+    判断是否应该跳过某个检测项
+    """
+    return check_name in GLOBAL_DETECTION_CONFIG.get('skip_checks', set())
+
 """
 === 论文格式检测系统 - 公式检测器 ===
 

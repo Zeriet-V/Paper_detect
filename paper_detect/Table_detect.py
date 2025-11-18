@@ -11,6 +11,15 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.table import Table
 
+# 全局检测配置（由 run_all_detections 在导入时注入）
+GLOBAL_DETECTION_CONFIG = {'skip_checks': set()}
+
+def should_skip_check(check_name):
+    """
+    判断是否应该跳过某个检测项
+    """
+    return check_name in GLOBAL_DETECTION_CONFIG.get('skip_checks', set())
+
 """
 === 论文格式检测系统 - 表格检测器 ===
 
@@ -516,16 +525,17 @@ def check_caption_format(caption_info, tpl):
             report['messages'].append(f"{msg}（当前：{actual_alignment_name}）")
     
     # 检查字体大小
-    expected_size = expected_format.get('font_size_pt', 12)
-    main_run = next((r for r in paragraph.runs if r.text.strip()), None)
-    if main_run:
-        actual_size, actual_font, _, _, _ = detect_font_for_run(main_run, paragraph)
-        if abs(actual_size - expected_size) > 0.5:
-            report['ok'] = False
-            expected_size_name = get_font_size(expected_size, tpl)
-            actual_size_name = get_font_size(actual_size, tpl)
-            msg = tpl.get('messages', {}).get('caption_font_size_error', '表格标题字体大小不正确')
-            report['messages'].append(f"{msg}（期望：{expected_size_name}，实际：{actual_size_name}）")
+    if not should_skip_check('font_size'):
+        expected_size = expected_format.get('font_size_pt', 12)
+        main_run = next((r for r in paragraph.runs if r.text.strip()), None)
+        if main_run:
+            actual_size, actual_font, _, _, _ = detect_font_for_run(main_run, paragraph)
+            if abs(actual_size - expected_size) > 0.5:
+                report['ok'] = False
+                expected_size_name = get_font_size(expected_size, tpl)
+                actual_size_name = get_font_size(actual_size, tpl)
+                msg = tpl.get('messages', {}).get('caption_font_size_error', '表格标题字体大小不正确')
+                report['messages'].append(f"{msg}（期望：{expected_size_name}，实际：{actual_size_name}）")
     
     # 检查标题大小写（首字母应大写）
     title = caption_info['title']

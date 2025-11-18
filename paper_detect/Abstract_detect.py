@@ -10,6 +10,15 @@ from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 from docx.oxml.ns import qn
 
+# 全局检测配置（由 run_all_detections 在导入时注入）
+GLOBAL_DETECTION_CONFIG = {'skip_checks': set()}
+
+def should_skip_check(check_name):
+    """
+    判断是否应该跳过某个检测项
+    """
+    return check_name in GLOBAL_DETECTION_CONFIG.get('skip_checks', set())
+
 """
 === 论文格式检测系统 - 摘要检测器 ===
 
@@ -383,7 +392,7 @@ def check_abstract_format(paragraph, tpl):
     issues = []
     
     # 字体大小检查
-    if 'font_size_pt' in format_rules:
+    if not should_skip_check('font_size') and 'font_size_pt' in format_rules:
         expected_size_pt = float(format_rules['font_size_pt'])
         actual_size_name = get_font_size(actual_size_pt, tpl)
         expected_size_name = get_font_size(expected_size_pt, tpl)
@@ -392,14 +401,14 @@ def check_abstract_format(paragraph, tpl):
             issues.append(f"字体大小应为{expected_size_name}（{expected_size_pt}pt），实际为{actual_size_name}（{actual_size_pt}pt）")
     
     # 字体名称检查
-    if 'font_name' in format_rules:
+    if not should_skip_check('font_name') and 'font_name' in format_rules:
         expected_font_name = str(format_rules['font_name'])
         print(f"字体名称: {actual_font_name} (期望: {expected_font_name})")
         if expected_font_name.lower() not in actual_font_name.lower():
             issues.append(f"字体应为{expected_font_name}，实际为{actual_font_name}")
     
     # 加粗检查
-    if 'bold' in format_rules:
+    if not should_skip_check('bold') and 'bold' in format_rules:
         expected_bold = bool(format_rules['bold'])
         print(f"加粗: {'是' if actual_bold else '否'} (期望: {'是' if expected_bold else '否'})")
         if actual_bold != expected_bold:
@@ -408,7 +417,7 @@ def check_abstract_format(paragraph, tpl):
             issues.append(f"字体应为{bold_status}，实际为{actual_status}")
     
     # 斜体检查
-    if 'italic' in format_rules:
+    if not should_skip_check('italic') and 'italic' in format_rules:
         expected_italic = bool(format_rules['italic'])
         print(f"斜体: {'是' if actual_italic else '否'} (期望: {'是' if expected_italic else '否'})")
         if actual_italic != expected_italic:
@@ -417,7 +426,7 @@ def check_abstract_format(paragraph, tpl):
             issues.append(f"字体应为{italic_status}，实际为{actual_status}")
     
     # 行间距检查
-    if 'line_spacing' in format_rules:
+    if not should_skip_check('spacing') and 'line_spacing' in format_rules:
         expected_line_spacing = float(format_rules['line_spacing'])
         actual_spacing_name = get_line_spacing_name(actual_line_spacing, tpl)
         expected_spacing_name = get_line_spacing_name(expected_line_spacing, tpl)
